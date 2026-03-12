@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import prisma from '../db';
-import { bookingRequestSchema } from '../schemas/booking';
+import { bookingRequestSchema, type BookingRequest } from '../schemas/booking';
 import { InsufficientInventoryError } from '../errors';
 import { simulatePayment } from '../services/paymentService';
 import {
@@ -12,24 +12,26 @@ import {
   toBookingResponse,
   BookingWithItems
 } from '../services/bookingService';
+import { sendError } from '../http/error';
 
 const bookingRoutes = async (app: FastifyInstance) => {
   app.post('/bookings', async (request, reply) => {
     const idempotencyKeyHeader = request.headers['idempotency-key'];
-    const idempotencyKey = typeof idempotencyKeyHeader === 'string' ? idempotencyKeyHeader : undefined;
+    const idempotencyKey =
+      typeof idempotencyKeyHeader === 'string' ? idempotencyKeyHeader : undefined;
 
     if (!idempotencyKey) {
-      return reply.code(400).send({ error: 'Missing Idempotency-Key header.' });
+      return sendError(reply, 400, 'MISSING_IDEMPOTENCY_KEY', 'Missing Idempotency-Key header.');
     }
 
-    let parsedBody: z.infer<typeof bookingRequestSchema>;
+    let parsedBody: BookingRequest;
     try {
       parsedBody = bookingRequestSchema.parse(request.body);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return reply.code(400).send({ error: 'Invalid request body.', issues: error.issues });
+        return sendError(reply, 400, 'VALIDATION_ERROR', 'Invalid request body.', error.issues);
       }
-      return reply.code(400).send({ error: 'Invalid request body.' });
+      return sendError(reply, 400, 'VALIDATION_ERROR', 'Invalid request body.');
     }
 
     let booking: BookingWithItems | null = null;
@@ -47,9 +49,13 @@ const bookingRoutes = async (app: FastifyInstance) => {
       created = transactionResult.created;
     } catch (error) {
       if (error instanceof InsufficientInventoryError) {
-        return reply
-          .code(409)
-          .send({ error: 'Not enough inventory for requested tier.', tierId: error.tierId });
+        return sendError(
+          reply,
+          409,
+          'INSUFFICIENT_INVENTORY',
+          'Not enough inventory for requested tier.',
+          { tierId: error.tierId }
+        );
       }
 
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -64,11 +70,11 @@ const bookingRoutes = async (app: FastifyInstance) => {
       }
 
       request.log.error(error, 'Booking failed');
-      return reply.code(500).send({ error: 'Booking failed.' });
+      return sendError(reply, 500, 'INTERNAL_ERROR', 'Booking failed.');
     }
 
     if (!booking) {
-      return reply.code(500).send({ error: 'Booking failed.' });
+      return sendError(reply, 500, 'INTERNAL_ERROR', 'Booking failed.');
     }
 
     if (!created) {

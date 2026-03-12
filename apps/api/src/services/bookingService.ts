@@ -2,17 +2,9 @@ import { BookingStatus, Prisma, PrismaClient } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { InsufficientInventoryError } from '../errors';
 import computeTotal from '../utils/computeTotal';
+import { BookingStatus as ContractBookingStatus, type BookingResponse } from '@ticket/contracts';
 
 export type BookingWithItems = Prisma.BookingGetPayload<{ include: { items: true } }>;
-
-export type BookingResponse = {
-  id: number;
-  bookingReference: string;
-  status: BookingStatus;
-  items: BookingWithItems['items'];
-  totalAmount: number;
-  idempotent: boolean;
-};
 
 export const reserveBooking = async (
   prisma: PrismaClient,
@@ -113,10 +105,13 @@ export const failBooking = async (prisma: PrismaClient, booking: BookingWithItem
   });
 };
 
-export const toBookingResponse = (booking: BookingWithItems, idempotent: boolean): BookingResponse => ({
+export const toBookingResponse = (
+  booking: BookingWithItems,
+  idempotent: boolean
+): BookingResponse => ({
   id: booking.id,
   bookingReference: booking.bookingReference,
-  status: booking.status,
+  status: booking.status as ContractBookingStatus,
   items: booking.items,
   totalAmount: computeTotal(booking.items),
   idempotent
