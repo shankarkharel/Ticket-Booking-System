@@ -10,7 +10,25 @@
 
 body {
   min-height: 100vh;
-  background: radial-gradient(circle at top right, rgba(92, 124, 109, 0.3), transparent 45%),
-    radial-gradient(circle at 10% 20%, rgba(210, 162, 107, 0.35), transparent 35%),
+  position: relative;
+  background: radial-gradient(circle at top right, rgba(92, 124, 109, 0.28), transparent 45%),
+    radial-gradient(circle at 10% 20%, rgba(210, 162, 107, 0.3), transparent 35%),
     #0b0b0f;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 48px 48px;
+  opacity: 0.35;
+  pointer-events: none;
+  z-index: 0;
+}
+
+#root {
+  position: relative;
+  z-index: 1;
 }
