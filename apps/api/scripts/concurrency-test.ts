@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 const API_URL = process.env.API_URL || 'http://localhost:4000';
 const CONCURRENCY = Number(process.env.CONCURRENCY || 100);
 const TIER_NAME = process.env.TIER_NAME || 'GA';
-const QUANTITY = Number(process.env.QUANTITY || 1);
+const SEAT_COUNT = Number(process.env.SEAT_COUNT || 5);
 
 const fetchJson = async (url: string, options?: RequestInit) => {
   const response = await fetch(url, options);
@@ -14,8 +14,9 @@ const fetchJson = async (url: string, options?: RequestInit) => {
 
 const main = async () => {
   const { data: tiers } = await fetchJson(`${API_URL}/tiers`);
-  if (!Array.isArray(tiers)) {
-    throw new Error('Failed to load tiers. Is the API running?');
+  const { data: seats } = await fetchJson(`${API_URL}/seats`);
+  if (!Array.isArray(tiers) || !Array.isArray(seats)) {
+    throw new Error('Failed to load tiers or seats. Is the API running?');
   }
 
   const tier = tiers.find((item) => item.name === TIER_NAME);
@@ -23,7 +24,24 @@ const main = async () => {
     throw new Error(`Tier "${TIER_NAME}" not found.`);
   }
 
-  const startingRemaining = tier.remainingQuantity as number;
+  const availableSeats = seats.filter(
+    (seat) => seat.tierId === tier.id && seat.status === 'AVAILABLE'
+  );
+  const targetSeats = availableSeats.slice(0, SEAT_COUNT).map((seat) => seat.id);
+
+  if (targetSeats.length < SEAT_COUNT) {
+    throw new Error(`Not enough available seats for ${TIER_NAME}.`);
+  }
+
+  const { data: hold } = await fetchJson(`${API_URL}/holds`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ seatIds: targetSeats })
+  });
+
+  if (!hold?.holdToken) {
+    throw new Error('Failed to hold seats for concurrency test.');
+  }
 
   const requests = Array.from({ length: CONCURRENCY }, () =>
     fetchJson(`${API_URL}/bookings`, {
@@ -35,7 +53,8 @@ const main = async () => {
       body: JSON.stringify({
         name: 'Load Test',
         email: 'loadtest@example.com',
-        items: [{ tierId: tier.id, quantity: QUANTITY }]
+        holdToken: hold.holdToken,
+        seatIds: targetSeats
       })
     })
   );
@@ -47,26 +66,23 @@ const main = async () => {
     return result.value.data?.status === 'CONFIRMED';
   }).length;
 
-  const { data: tiersAfter } = await fetchJson(`${API_URL}/tiers`);
-  const after = Array.isArray(tiersAfter)
-    ? tiersAfter.find((item) => item.id === tier.id)
-    : undefined;
-
-  const remaining = after?.remainingQuantity ?? 'unknown';
-  const totalBooked = confirmed * QUANTITY;
+  const { data: seatsAfter } = await fetchJson(`${API_URL}/seats`);
+  const afterSeats = Array.isArray(seatsAfter)
+    ? seatsAfter.filter((seat) => targetSeats.includes(seat.id))
+    : [];
+  const bookedSeats = afterSeats.filter((seat) => seat.status === 'BOOKED').length;
 
   console.log('Concurrency test results');
   console.log(`Tier: ${TIER_NAME}`);
-  console.log(`Starting remaining: ${startingRemaining}`);
+  console.log(`Seat set size: ${targetSeats.length}`);
   console.log(`Confirmed bookings: ${confirmed}`);
-  console.log(`Total booked: ${totalBooked}`);
-  console.log(`Remaining after: ${remaining}`);
+  console.log(`Booked seats after: ${bookedSeats}`);
 
-  if (totalBooked > startingRemaining) {
-    throw new Error('Oversell detected.');
+  if (confirmed > 1 || bookedSeats > targetSeats.length) {
+    throw new Error('Double-booking detected.');
   }
 
-  console.log('No oversell detected.');
+  console.log('No double-booking detected.');
 };
 
 main().catch((error) => {

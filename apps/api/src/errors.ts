@@ -6,3 +6,12 @@ export class InsufficientInventoryError extends Error {
     this.tierId = tierId;
   }
 }
+
+export class SeatUnavailableError extends Error {
+  seatIds: number[];
+
+  constructor(seatIds: number[]) {
+    super('SEAT_UNAVAILABLE');
+    this.seatIds = seatIds;
+  }
+}

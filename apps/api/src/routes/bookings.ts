@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import prisma from '../db';
 import { bookingRequestSchema, type BookingRequest } from '../schemas/booking';
-import { InsufficientInventoryError } from '../errors';
+import { InsufficientInventoryError, SeatUnavailableError } from '../errors';
 import { simulatePayment } from '../services/paymentService';
 import {
   reserveBooking,
@@ -40,7 +40,8 @@ const bookingRoutes = async (app: FastifyInstance) => {
     try {
       const transactionResult = await reserveBooking(
         prisma,
-        parsedBody.items,
+        parsedBody.seatIds,
+        parsedBody.holdToken,
         idempotencyKey,
         parsedBody.name,
         parsedBody.email
@@ -48,6 +49,16 @@ const bookingRoutes = async (app: FastifyInstance) => {
       booking = transactionResult.booking;
       created = transactionResult.created;
     } catch (error) {
+      if (error instanceof SeatUnavailableError) {
+        return sendError(
+          reply,
+          409,
+          'SEAT_UNAVAILABLE',
+          'One or more selected seats are no longer available.',
+          { seatIds: error.seatIds }
+        );
+      }
+
       if (error instanceof InsufficientInventoryError) {
         return sendError(
           reply,
@@ -61,7 +72,7 @@ const bookingRoutes = async (app: FastifyInstance) => {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         const existing = await prisma.booking.findUnique({
           where: { idempotencyKey },
-          include: { items: true }
+          include: { items: true, seats: true }
         });
 
         if (existing) {

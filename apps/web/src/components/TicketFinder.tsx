@@ -1,15 +1,33 @@
 import { useState } from 'react';
-import type { Tier } from '../lib/types';
+import type { Seat, Tier } from '../lib/types';
 import SeatMap from './SeatMap';
 import SectionList from './SectionList';
 
 type TicketFinderProps = {
   tiers?: Tier[];
-  quantities?: Record<number, number>;
+  seats?: Seat[];
+  selectedSeatIds: number[];
+  availabilityByTierId?: Record<number, number>;
+  selectedByTierId?: Record<number, number>;
+  focusedTierId?: number | null;
+  interactionDisabled?: boolean;
   onSelectTier?: (tierId: number) => void;
+  onToggleSeat?: (seatId: number) => void;
+  isLoading?: boolean;
 };
 
-const TicketFinder = ({ tiers, quantities, onSelectTier }: TicketFinderProps) => {
+const TicketFinder = ({
+  tiers,
+  seats,
+  selectedSeatIds,
+  availabilityByTierId,
+  selectedByTierId,
+  focusedTierId,
+  interactionDisabled,
+  onSelectTier,
+  onToggleSeat,
+  isLoading
+}: TicketFinderProps) => {
   const [view, setView] = useState<'section' | 'map'>('section');
 
   return (
@@ -45,13 +63,27 @@ const TicketFinder = ({ tiers, quantities, onSelectTier }: TicketFinderProps) =>
 
       <div className="mt-6">
         {view === 'section' ? (
-          <SectionList tiers={tiers} onSelectTier={onSelectTier} />
+          <SectionList
+            tiers={tiers}
+            availabilityByTierId={availabilityByTierId}
+            selectedByTierId={selectedByTierId}
+            onSelectTier={(tierId) => {
+              setView('map');
+              onSelectTier?.(tierId);
+            }}
+          />
         ) : (
           <SeatMap
             tiers={tiers}
-            quantities={quantities}
+            seats={seats}
+            selectedSeatIds={selectedSeatIds}
+            availabilityByTierId={availabilityByTierId}
+            focusedTierId={focusedTierId}
             onSelectTier={onSelectTier}
+            onToggleSeat={onToggleSeat}
+            interactionDisabled={interactionDisabled}
             showHeader={false}
+            isLoading={isLoading}
           />
         )}
       </div>

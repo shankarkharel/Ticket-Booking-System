@@ -1,9 +1,10 @@
-import { BookingStatus, type BookingResponse, type Tier } from '../lib/types';
+import { BookingStatus, type BookingResponse, type Seat, type Tier } from '../lib/types';
 import { formatCurrency } from '../lib/format';
 
 export type SelectedItem = {
   tier: Tier;
   quantity: number;
+  seats: Seat[];
 };
 
 type OrderSummaryProps = {
@@ -12,18 +13,29 @@ type OrderSummaryProps = {
   lastBooking: BookingResponse | null;
 };
 
+const formatSeatList = (seats: Seat[]) => {
+  const labels = seats.map((seat) => seat.label);
+  if (labels.length <= 6) return labels.join(', ');
+  return `${labels.slice(0, 6).join(', ')} +${labels.length - 6} more`;
+};
+
 const OrderSummary = ({ selectedItems, totalAmount, lastBooking }: OrderSummaryProps) => (
   <div className="flex flex-col gap-4">
     <div className="space-y-3">
       {selectedItems.length === 0 && (
-        <p className="text-sm text-slate-300">No tickets selected yet.</p>
+        <p className="text-sm text-slate-300">No seats selected yet.</p>
       )}
       {selectedItems.map((item) => (
-        <div key={item.tier.id} className="flex items-center justify-between text-sm">
-          <span>{item.tier.name}</span>
-          <span>
-            {item.quantity} × {formatCurrency(item.tier.price)}
-          </span>
+        <div key={item.tier.id} className="space-y-1 text-sm">
+          <div className="flex items-center justify-between">
+            <span>{item.tier.name}</span>
+            <span>
+              {item.quantity} × {formatCurrency(item.tier.price)}
+            </span>
+          </div>
+          {item.seats.length > 0 && (
+            <div className="text-xs text-slate-400">Seats: {formatSeatList(item.seats)}</div>
+          )}
         </div>
       ))}
     </div>
@@ -60,8 +72,8 @@ const OrderSummary = ({ selectedItems, totalAmount, lastBooking }: OrderSummaryP
     )}
 
     <div className="rounded-2xl border border-white/10 bg-ink-700/40 p-4 text-xs text-slate-300">
-      Inventory is reserved inside a database transaction with conditional updates. If stock changes
-      mid-request, the booking is rejected and inventory stays consistent.
+      Seats are reserved with transactional row updates. If a seat is claimed elsewhere, the booking
+      is rejected and inventory remains consistent.
     </div>
   </div>
 );

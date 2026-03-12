@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, SeatStatus } from '@prisma/client';
 import { Pool } from 'pg';
 import { config } from '../src/config';
 
@@ -12,28 +12,79 @@ const prisma = new PrismaClient({
   adapter: new PrismaPg(pool)
 });
 
-async function main() {
-  const tiers = [
-    { name: 'VIP', price: 100, totalQuantity: 20 },
-    { name: 'Front Row', price: 50, totalQuantity: 50 },
-    { name: 'GA', price: 10, totalQuantity: 200 }
-  ];
+type SeatConfig = {
+  tierName: string;
+  price: number;
+  rows: string[];
+  perRow: number;
+};
 
-  for (const tier of tiers) {
-    await prisma.ticketTier.upsert({
-      where: { name: tier.name },
+const seatConfigs: SeatConfig[] = [
+  { tierName: 'VIP', price: 100, rows: ['A', 'B', 'C', 'D'], perRow: 5 },
+  { tierName: 'Front Row', price: 50, rows: ['A', 'B', 'C', 'D', 'E'], perRow: 10 },
+  {
+    tierName: 'GA',
+    price: 10,
+    rows: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'],
+    perRow: 20
+  }
+];
+
+const buildSeats = (rows: string[], perRow: number) => {
+  const seats: { row: string; number: number; label: string }[] = [];
+  rows.forEach((row) => {
+    for (let i = 1; i <= perRow; i += 1) {
+      seats.push({ row, number: i, label: `${row}${i}` });
+    }
+  });
+  return seats;
+};
+
+async function main() {
+  for (const config of seatConfigs) {
+    const seats = buildSeats(config.rows, config.perRow);
+    const totalQuantity = seats.length;
+
+    const tier = await prisma.ticketTier.upsert({
+      where: { name: config.tierName },
       update: {
-        price: tier.price,
-        totalQuantity: tier.totalQuantity,
-        remainingQuantity: tier.totalQuantity
+        price: config.price,
+        totalQuantity,
+        remainingQuantity: totalQuantity
       },
       create: {
-        name: tier.name,
-        price: tier.price,
-        totalQuantity: tier.totalQuantity,
-        remainingQuantity: tier.totalQuantity
+        name: config.tierName,
+        price: config.price,
+        totalQuantity,
+        remainingQuantity: totalQuantity
       }
     });
+
+    for (const seat of seats) {
+      await prisma.ticketSeat.upsert({
+        where: {
+          tierId_row_number: {
+            tierId: tier.id,
+            row: seat.row,
+            number: seat.number
+          }
+        },
+        update: {
+          label: seat.label,
+          status: SeatStatus.AVAILABLE,
+          bookingId: null,
+          holdToken: null,
+          holdExpiresAt: null
+        },
+        create: {
+          tierId: tier.id,
+          row: seat.row,
+          number: seat.number,
+          label: seat.label,
+          status: SeatStatus.AVAILABLE
+        }
+      });
+    }
   }
 }
 

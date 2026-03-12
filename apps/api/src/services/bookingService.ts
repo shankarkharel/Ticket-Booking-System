@@ -1,72 +1,97 @@
-import { BookingStatus, Prisma, PrismaClient } from '@prisma/client';
+import { BookingStatus, Prisma, PrismaClient, SeatStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
-import { InsufficientInventoryError } from '../errors';
+import { SeatUnavailableError } from '../errors';
 import computeTotal from '../utils/computeTotal';
 import { BookingStatus as ContractBookingStatus, type BookingResponse } from '@ticket/contracts';
+import { releaseExpiredHolds } from './seatService';
 
-export type BookingWithItems = Prisma.BookingGetPayload<{ include: { items: true } }>;
+export type BookingWithItems = Prisma.BookingGetPayload<{
+  include: { items: true; seats: true };
+}>;
 
 export const reserveBooking = async (
   prisma: PrismaClient,
-  items: { tierId: number; quantity: number }[],
+  seatIds: number[],
+  holdToken: string,
   idempotencyKey: string,
   customerName: string,
   customerEmail: string
 ) => {
-  const sortedItems = [...items].sort((a, b) => a.tierId - b.tierId);
+  const uniqueSeatIds = Array.from(new Set(seatIds)).sort((a, b) => a - b);
 
   const transactionResult = await prisma.$transaction(async (tx) => {
+    await releaseExpiredHolds(tx);
+
     const existing = await tx.booking.findUnique({
       where: { idempotencyKey },
-      include: { items: true }
+      include: { items: true, seats: true }
     });
 
     if (existing) {
       return { booking: existing, created: false };
     }
 
-    const bookingItems: { tierId: number; quantity: number; unitPrice: number }[] = [];
-
-    // Concurrency control: conditional UPDATE inside a transaction ensures no oversell.
-    for (const item of sortedItems) {
-      const updated = await tx.$queryRaw<
-        { id: number; price: number; remaining_quantity: number }[]
-      >`UPDATE ticket_tiers
-         SET remaining_quantity = remaining_quantity - ${item.quantity}
-         WHERE id = ${item.tierId}
-           AND remaining_quantity >= ${item.quantity}
-         RETURNING id, price, remaining_quantity`;
-
-      if (updated.length === 0) {
-        throw new InsufficientInventoryError(item.tierId);
-      }
-
-      bookingItems.push({
-        tierId: updated[0].id,
-        quantity: item.quantity,
-        unitPrice: updated[0].price
-      });
-    }
-
     const bookingReference = `BK-${new Date().toISOString().replace(/[-:.TZ]/g, '')}-${randomUUID()}`;
 
-    const createdBooking = await tx.booking.create({
+    const booking = await tx.booking.create({
       data: {
         bookingReference,
         customerName,
         customerEmail,
         status: BookingStatus.PENDING,
-        idempotencyKey,
-        items: {
-          create: bookingItems.map((item) => ({
-            tierId: item.tierId,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice
-          }))
-        }
-      },
-      include: { items: true }
+        idempotencyKey
+      }
     });
+
+    const now = new Date();
+    const updatedSeats = await tx.$queryRaw<{ id: number; tier_id: number }[]>`
+      UPDATE ticket_seats
+      SET booking_id = ${booking.id}
+      WHERE id IN (${Prisma.join(uniqueSeatIds)})
+        AND status = ${SeatStatus.HELD}
+        AND hold_token = ${holdToken}
+        AND hold_expires_at IS NOT NULL
+        AND hold_expires_at > ${now}
+        AND booking_id IS NULL
+      RETURNING id, tier_id
+    `;
+
+    if (updatedSeats.length !== uniqueSeatIds.length) {
+      const updatedIds = new Set(updatedSeats.map((seat) => seat.id));
+      const missing = uniqueSeatIds.filter((id) => !updatedIds.has(id));
+      throw new SeatUnavailableError(missing);
+    }
+
+    const tierCounts = updatedSeats.reduce<Record<number, number>>((acc, seat) => {
+      acc[seat.tier_id] = (acc[seat.tier_id] || 0) + 1;
+      return acc;
+    }, {});
+
+    const tiers = await tx.ticketTier.findMany({
+      where: { id: { in: Object.keys(tierCounts).map(Number) } }
+    });
+
+    const bookingItems = tiers.map((tier) => ({
+      bookingId: booking.id,
+      tierId: tier.id,
+      quantity: tierCounts[tier.id] ?? 0,
+      unitPrice: tier.price
+    }));
+
+    if (bookingItems.length > 0) {
+      await tx.bookingItem.createMany({
+        data: bookingItems
+      });
+    }
+
+    const createdBooking = await tx.booking.findUnique({
+      where: { id: booking.id },
+      include: { items: true, seats: true }
+    });
+
+    if (!createdBooking) {
+      throw new Error('BOOKING_CREATE_FAILED');
+    }
 
     return { booking: createdBooking, created: true };
   });
@@ -75,10 +100,17 @@ export const reserveBooking = async (
 };
 
 export const confirmBooking = async (prisma: PrismaClient, bookingId: number) => {
-  return prisma.booking.update({
-    where: { id: bookingId },
-    data: { status: BookingStatus.CONFIRMED },
-    include: { items: true }
+  return prisma.$transaction(async (tx) => {
+    await tx.ticketSeat.updateMany({
+      where: { bookingId, status: SeatStatus.HELD },
+      data: { status: SeatStatus.BOOKED, holdToken: null, holdExpiresAt: null }
+    });
+
+    return tx.booking.update({
+      where: { id: bookingId },
+      data: { status: BookingStatus.CONFIRMED },
+      include: { items: true, seats: true }
+    });
   });
 };
 
@@ -93,6 +125,16 @@ export const failBooking = async (prisma: PrismaClient, booking: BookingWithItem
         WHERE id = ${item.tierId}`;
     }
 
+    await tx.ticketSeat.updateMany({
+      where: { bookingId: booking.id, status: SeatStatus.HELD },
+      data: {
+        status: SeatStatus.AVAILABLE,
+        bookingId: null,
+        holdToken: null,
+        holdExpiresAt: null
+      }
+    });
+
     await tx.booking.update({
       where: { id: booking.id },
       data: { status: BookingStatus.FAILED }
@@ -101,7 +143,7 @@ export const failBooking = async (prisma: PrismaClient, booking: BookingWithItem
 
   return prisma.booking.findUnique({
     where: { id: booking.id },
-    include: { items: true }
+    include: { items: true, seats: true }
   });
 };
 
@@ -113,6 +155,7 @@ export const toBookingResponse = (
   bookingReference: booking.bookingReference,
   status: booking.status as ContractBookingStatus,
   items: booking.items,
+  seatIds: booking.seats.map((seat) => seat.id),
   totalAmount: computeTotal(booking.items),
   idempotent
 });

@@ -5,6 +5,8 @@ import prisma from './db';
 import { config } from './config';
 import healthRoutes from './routes/health';
 import tierRoutes from './routes/tiers';
+import seatRoutes from './routes/seats';
+import holdRoutes from './routes/holds';
 import bookingRoutes from './routes/bookings';
 
 const buildApp = () => {
@@ -17,6 +19,8 @@ const buildApp = () => {
   });
   app.register(healthRoutes);
   app.register(tierRoutes);
+  app.register(seatRoutes);
+  app.register(holdRoutes);
   app.register(bookingRoutes);
 
   app.addHook('onClose', async () => {

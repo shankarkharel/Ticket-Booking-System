@@ -1,1 +1,6 @@
-export { bookingRequestSchema, type BookingRequest } from '@ticket/contracts';
+export {
+  bookingRequestSchema,
+  holdRequestSchema,
+  type BookingRequest,
+  type HoldRequest
+} from '@ticket/contracts';

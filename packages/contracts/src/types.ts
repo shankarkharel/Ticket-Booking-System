@@ -6,6 +6,27 @@ export type Tier = {
   remainingQuantity: number;
 };
 
+export enum SeatStatus {
+  AVAILABLE = 'AVAILABLE',
+  HELD = 'HELD',
+  BOOKED = 'BOOKED'
+}
+
+export type Seat = {
+  id: number;
+  tierId: number;
+  row: string;
+  number: number;
+  label: string;
+  status: SeatStatus;
+};
+
+export type HoldResponse = {
+  holdToken: string;
+  expiresAt: string;
+  seatIds: number[];
+};
+
 export enum BookingStatus {
   PENDING = 'PENDING',
   CONFIRMED = 'CONFIRMED',
@@ -23,6 +44,7 @@ export type BookingResponse = {
   bookingReference: string;
   status: BookingStatus;
   items: BookingItem[];
+  seatIds: number[];
   totalAmount: number;
   idempotent: boolean;
 };
@@ -31,6 +53,7 @@ export type ApiErrorCode =
   | 'VALIDATION_ERROR'
   | 'MISSING_IDEMPOTENCY_KEY'
   | 'INSUFFICIENT_INVENTORY'
+  | 'SEAT_UNAVAILABLE'
   | 'INTERNAL_ERROR'
   | 'PAYMENT_FAILED';
 

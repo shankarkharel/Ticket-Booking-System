@@ -12,6 +12,12 @@ enum BookingStatus {
   FAILED
 }
 
+enum SeatStatus {
+  AVAILABLE
+  HELD
+  BOOKED
+}
+
 model TicketTier {
   id                Int           @id @default(autoincrement())
   name              String        @unique
@@ -19,6 +25,7 @@ model TicketTier {
   totalQuantity     Int           @map("total_quantity")
   remainingQuantity Int           @map("remaining_quantity")
   bookingItems      BookingItem[]
+  seats             TicketSeat[]
 
   @@map("ticket_tiers")
 }
@@ -32,6 +39,7 @@ model Booking {
   idempotencyKey  String        @unique @map("idempotency_key")
   createdAt       DateTime      @default(now()) @map("created_at")
   items           BookingItem[]
+  seats           TicketSeat[]
 
   @@map("bookings")
 }
@@ -47,4 +55,26 @@ model BookingItem {
 
   @@id([bookingId, tierId])
   @@map("booking_items")
+}
+
+model TicketSeat {
+  id        Int        @id @default(autoincrement())
+  tierId    Int        @map("tier_id")
+  row       String
+  number    Int
+  label     String
+  status    SeatStatus @default(AVAILABLE)
+  bookingId Int?       @map("booking_id")
+  holdToken String?    @map("hold_token")
+  holdExpiresAt DateTime? @map("hold_expires_at")
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  tier    TicketTier @relation(fields: [tierId], references: [id])
+  booking Booking?   @relation(fields: [bookingId], references: [id])
+
+  @@unique([tierId, row, number])
+  @@index([tierId, status])
+  @@index([holdToken])
+  @@map("ticket_seats")
 }

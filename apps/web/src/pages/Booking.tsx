@@ -1,17 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useFieldArray, useForm, useWatch } from 'react-hook-form';
+import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Link } from 'react-router-dom';
 import { bookingSchema, type BookingForm } from '../lib/schemas';
-import { createBooking, fetchTiers } from '../lib/api';
-import type { BookingResponse, Tier } from '../lib/types';
+import { createBooking, createHold, fetchSeats, fetchTiers, releaseHold } from '../lib/api';
+import { SeatStatus, type BookingResponse, type Seat } from '../lib/types';
 import SectionCard from '../components/SectionCard';
-import TierCard from '../components/TierCard';
 import OrderSummary, { type SelectedItem } from '../components/OrderSummary';
 import Toast from '../components/Toast';
 import CustomerFields from '../components/CustomerFields';
-import TicketModal from '../components/TicketModal';
 import TicketFinder from '../components/TicketFinder';
 
 enum PaymentMethod {
@@ -25,33 +23,50 @@ enum PaymentState {
   Confirming = 'confirming'
 }
 
+const formatCountdown = (seconds: number) => {
+  const safe = Math.max(0, seconds);
+  const minutes = Math.floor(safe / 60);
+  const remaining = safe % 60;
+  return `${minutes}:${String(remaining).padStart(2, '0')}`;
+};
+
 const Booking = () => {
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [lastBooking, setLastBooking] = useState<BookingResponse | null>(null);
-  const [activeTierId, setActiveTierId] = useState<number | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(PaymentMethod.PayPal);
   const [paymentState, setPaymentState] = useState<PaymentState>(PaymentState.Idle);
+  const [focusedTierId, setFocusedTierId] = useState<number | null>(null);
+  const [holdToken, setHoldToken] = useState<string | null>(null);
+  const [holdExpiresAt, setHoldExpiresAt] = useState<Date | null>(null);
+  const [holdSecondsLeft, setHoldSecondsLeft] = useState(0);
 
   const {
     data: tiers,
-    isLoading,
-    error,
-    refetch
+    isLoading: tiersLoading,
+    error: tiersError,
+    refetch: refetchTiers
   } = useQuery({
     queryKey: ['tiers'],
     queryFn: fetchTiers
   });
 
+  const {
+    data: seats,
+    isLoading: seatsLoading,
+    error: seatsError,
+    refetch: refetchSeats
+  } = useQuery({
+    queryKey: ['seats'],
+    queryFn: fetchSeats
+  });
+
   const form = useForm<BookingForm>({
     resolver: zodResolver(bookingSchema),
     mode: 'onChange',
-    defaultValues: { name: '', email: '', items: [] }
+    defaultValues: { name: '', email: '', seatIds: [] }
   });
 
-  const { fields, replace } = useFieldArray({
-    control: form.control,
-    name: 'items'
-  });
+  const selectedSeatIds = useWatch({ control: form.control, name: 'seatIds' }) ?? [];
 
   useEffect(() => {
     if (!toast) return;
@@ -60,75 +75,175 @@ const Booking = () => {
   }, [toast]);
 
   useEffect(() => {
-    if (tiers) {
-      replace(
-        tiers.map((tier) => ({
-          tierId: tier.id,
-          quantity: 0
-        }))
-      );
+    if (!holdExpiresAt) {
+      setHoldSecondsLeft(0);
+      return undefined;
     }
-  }, [tiers, replace]);
 
-  const quantities = useWatch({ control: form.control, name: 'items' });
-  const quantitiesByTierId = useMemo(() => {
+    const tick = () => {
+      const diff = holdExpiresAt.getTime() - Date.now();
+      if (diff <= 0) {
+        setHoldToken(null);
+        setHoldExpiresAt(null);
+        form.setValue('seatIds', [], { shouldValidate: true });
+        setToast({ type: 'error', message: 'Hold expired. Select seats again.' });
+        refetchSeats();
+        refetchTiers();
+      } else {
+        setHoldSecondsLeft(Math.ceil(diff / 1000));
+      }
+    };
+
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [holdExpiresAt, form, refetchSeats, refetchTiers]);
+
+  const seatsById = useMemo(() => {
+    const map = new Map<number, Seat>();
+    (seats ?? []).forEach((seat) => map.set(seat.id, seat));
+    return map;
+  }, [seats]);
+
+  const selectedSeats = useMemo(
+    () => selectedSeatIds.map((id) => seatsById.get(id)).filter(Boolean) as Seat[],
+    [selectedSeatIds, seatsById]
+  );
+
+  useEffect(() => {
+    if (!seats) return;
+    const availableIds = new Set(
+      seats.filter((seat) => seat.status === SeatStatus.AVAILABLE).map((seat) => seat.id)
+    );
+    const filtered = selectedSeatIds.filter((id) => availableIds.has(id));
+    if (filtered.length !== selectedSeatIds.length && !holdToken) {
+      form.setValue('seatIds', filtered, { shouldValidate: true });
+      setToast({ type: 'error', message: 'Some seats are no longer available.' });
+    }
+  }, [seats, selectedSeatIds, form, holdToken]);
+
+  const availabilityByTierId = useMemo(() => {
     const map: Record<number, number> = {};
-    quantities?.forEach((item) => {
-      if (item?.tierId) {
-        map[item.tierId] = item.quantity;
+    (seats ?? []).forEach((seat) => {
+      if (seat.status === SeatStatus.AVAILABLE) {
+        map[seat.tierId] = (map[seat.tierId] || 0) + 1;
       }
     });
     return map;
-  }, [quantities]);
+  }, [seats]);
 
-  const mutation = useMutation({
-    mutationFn: (payload: {
-      items: { tierId: number; quantity: number }[];
-      name: string;
-      email: string;
-    }) => createBooking(payload),
+  const selectedByTierId = useMemo(() => {
+    const map: Record<number, number> = {};
+    selectedSeats.forEach((seat) => {
+      map[seat.tierId] = (map[seat.tierId] || 0) + 1;
+    });
+    return map;
+  }, [selectedSeats]);
+
+  const selectedItems = useMemo<SelectedItem[]>(() => {
+    if (!tiers) return [];
+    return tiers
+      .filter((tier) => selectedByTierId[tier.id])
+      .map((tier) => ({
+        tier,
+        quantity: selectedByTierId[tier.id] ?? 0,
+        seats: selectedSeats.filter((seat) => seat.tierId === tier.id)
+      }));
+  }, [tiers, selectedByTierId, selectedSeats]);
+
+  const totalAmount = useMemo(
+    () => selectedItems.reduce((sum, item) => sum + item.quantity * item.tier.price, 0),
+    [selectedItems]
+  );
+
+  const toggleSeat = (seatId: number) => {
+    if (holdToken) return;
+    const next = new Set(selectedSeatIds);
+    if (next.has(seatId)) {
+      next.delete(seatId);
+    } else {
+      next.add(seatId);
+    }
+    form.setValue('seatIds', Array.from(next), { shouldValidate: true });
+  };
+
+  const holdMutation = useMutation({
+    mutationFn: (seatIds: number[]) => createHold({ seatIds }),
+    onSuccess: (data) => {
+      setHoldToken(data.holdToken);
+      setHoldExpiresAt(new Date(data.expiresAt));
+      setToast({ type: 'success', message: 'Seats held for 2 minutes. Complete payment.' });
+      refetchSeats();
+      refetchTiers();
+    },
+    onError: (err: Error) => {
+      setToast({ type: 'error', message: err.message });
+      refetchSeats();
+    }
+  });
+
+  const bookingMutation = useMutation({
+    mutationFn: (payload: { seatIds: number[]; holdToken: string; name: string; email: string }) =>
+      createBooking(payload),
     onSuccess: (data) => {
       setLastBooking(data);
-      setToast({ type: 'success', message: 'Booking confirmed. Tickets locked in.' });
-      setActiveTierId(null);
+      setToast({ type: 'success', message: 'Booking confirmed. Seats locked in.' });
       setPaymentState(PaymentState.Idle);
-      const currentItems = form.getValues().items;
+      setHoldToken(null);
+      setHoldExpiresAt(null);
       const currentName = form.getValues().name;
       const currentEmail = form.getValues().email;
-      form.reset({
-        name: currentName,
-        email: currentEmail,
-        items: currentItems.map((item) => ({ ...item, quantity: 0 }))
-      });
-      refetch();
+      form.reset({ name: currentName, email: currentEmail, seatIds: [] });
+      refetchTiers();
+      refetchSeats();
     },
     onError: (err: Error) => {
       setToast({ type: 'error', message: err.message });
       setPaymentState(PaymentState.Idle);
+      setHoldToken(null);
+      setHoldExpiresAt(null);
+      form.setValue('seatIds', [], { shouldValidate: true });
+      refetchSeats();
+      refetchTiers();
     }
   });
 
-  const selectedItems = useMemo<SelectedItem[]>(() => {
-    if (!tiers || !quantities) return [];
-    return quantities
-      .map((item, index) => ({
-        tier: tiers[index] as Tier,
-        quantity: item.quantity
-      }))
-      .filter((item) => item.quantity > 0);
-  }, [quantities, tiers]);
+  const handleHold = () => {
+    if (holdMutation.isPending || selectedSeatIds.length === 0) return;
+    holdMutation.mutate(selectedSeatIds);
+  };
 
-  const totalAmount = useMemo(() => {
-    return selectedItems.reduce((sum, item) => sum + item.quantity * item.tier.price, 0);
-  }, [selectedItems]);
+  const handleReleaseHold = async () => {
+    if (!holdToken) return;
+    try {
+      await releaseHold(holdToken);
+      setHoldToken(null);
+      setHoldExpiresAt(null);
+      form.setValue('seatIds', [], { shouldValidate: true });
+      setToast({ type: 'success', message: 'Hold released.' });
+      refetchSeats();
+      refetchTiers();
+    } catch (error) {
+      setToast({ type: 'error', message: 'Unable to release hold.' });
+    }
+  };
 
   const handleSubmit = (data: BookingForm) => {
-    const items = data.items.filter((item) => item.quantity > 0);
-    mutation.mutate({ items, name: data.name, email: data.email });
+    if (!holdToken) {
+      setToast({ type: 'error', message: 'Hold seats before confirming payment.' });
+      return;
+    }
+    bookingMutation.mutate({
+      seatIds: data.seatIds,
+      holdToken,
+      name: data.name,
+      email: data.email
+    });
   };
 
   const handlePaymentSubmit = async (data: BookingForm) => {
-    if (mutation.isPending || paymentState !== PaymentState.Idle) return;
+    if (bookingMutation.isPending || paymentState !== PaymentState.Idle) return;
+    if (!holdToken) return;
     if (paymentMethod === PaymentMethod.PayPal) {
       setPaymentState(PaymentState.Authorizing);
       await new Promise((resolve) => setTimeout(resolve, 1200));
@@ -137,28 +252,10 @@ const Booking = () => {
     handleSubmit(data);
   };
 
-  const handleModalConfirm = () => {
-    setActiveTierId(null);
-    form.handleSubmit(handlePaymentSubmit)();
-  };
-
-  const overallError = form.formState.errors.items?.message;
-  const activeTier = tiers?.find((tier) => tier.id === activeTierId);
-  const activeIndex = activeTier
-    ? (tiers?.findIndex((tier) => tier.id === activeTier.id) ?? -1)
-    : -1;
-  const activeQuantity = activeIndex >= 0 ? (quantities?.[activeIndex]?.quantity ?? 0) : 0;
-  const canSubmit = selectedItems.length > 0 && form.formState.isValid;
-  const primaryCtaLabel =
-    paymentState === PaymentState.Authorizing
-      ? 'Redirecting to PayPal...'
-      : paymentState === PaymentState.Confirming || mutation.isPending
-        ? 'Confirming payment...'
-        : !canSubmit
-          ? 'Select seats and enter details'
-          : paymentMethod === PaymentMethod.PayPal
-            ? 'Confirm payment with PayPal'
-            : 'Confirm payment';
+  const overallError = form.formState.errors.seatIds?.message;
+  const canHold = selectedSeatIds.length > 0 && !holdToken;
+  const canPay = holdToken && form.formState.isValid;
+  const holdCtaLabel = holdMutation.isPending ? 'Holding seats...' : 'Hold seats (2 min)';
 
   return (
     <div className="min-h-screen px-6 py-10">
@@ -175,16 +272,21 @@ const Booking = () => {
         <div className="rounded-[28px] border border-white/10 bg-ink-900/60 p-6">
           <h1 className="text-3xl font-semibold text-white">Book tickets</h1>
           <p className="mt-2 text-sm text-slate-300">
-            Choose your tiers, confirm payment, and receive your booking reference instantly.
+            Pick individual seats, hold them for two minutes, then complete payment to confirm.
           </p>
         </div>
 
         <TicketFinder
           tiers={tiers}
-          quantities={quantitiesByTierId}
-          onSelectTier={(tierId) => {
-            setActiveTierId(tierId);
-          }}
+          seats={seats}
+          selectedSeatIds={selectedSeatIds}
+          availabilityByTierId={availabilityByTierId}
+          selectedByTierId={selectedByTierId}
+          focusedTierId={focusedTierId}
+          onSelectTier={(tierId) => setFocusedTierId(tierId)}
+          onToggleSeat={toggleSeat}
+          interactionDisabled={Boolean(holdToken)}
+          isLoading={tiersLoading || seatsLoading}
         />
 
         <form
@@ -192,57 +294,68 @@ const Booking = () => {
           className="grid gap-6 lg:grid-cols-[1.35fr,0.9fr]"
         >
           <SectionCard
-            title="Choose your tickets"
-            description="Select quantities by tier. Inventory updates instantly after booking."
+            title="Seat selection"
+            description="Tap seats in the map to add or remove them from your booking."
             action={
-              <button
-                className="text-sm text-sage-300 transition hover:text-sage-500"
-                type="button"
-                onClick={() => refetch()}
-              >
-                Refresh availability
-              </button>
+              <div className="flex items-center gap-3">
+                {holdToken && (
+                  <button
+                    className="text-xs text-yellow-300 transition hover:text-yellow-200"
+                    type="button"
+                    onClick={handleReleaseHold}
+                  >
+                    Release hold
+                  </button>
+                )}
+                <button
+                  className="text-sm text-sage-300 transition hover:text-sage-500"
+                  type="button"
+                  onClick={() => {
+                    refetchTiers();
+                    refetchSeats();
+                  }}
+                >
+                  Refresh availability
+                </button>
+              </div>
             }
           >
-            {isLoading && <p className="text-slate-300">Loading tiers...</p>}
-            {error && <p className="text-rose-300">Unable to load tiers.</p>}
+            {(tiersLoading || seatsLoading) && <p className="text-slate-300">Loading seats...</p>}
+            {(tiersError || seatsError) && (
+              <p className="text-rose-300">Unable to load seat availability.</p>
+            )}
 
-            <div className="space-y-4">
-              {fields.map((field, index) => {
-                const tier = tiers?.[index];
-                if (!tier) return null;
-                const quantity = quantities?.[index]?.quantity ?? 0;
+            {holdToken && holdExpiresAt && (
+              <div className="mt-4 rounded-2xl border border-yellow-400/40 bg-yellow-400/10 px-4 py-3 text-sm text-yellow-100">
+                Hold active. Complete checkout in{' '}
+                <span className="font-semibold">{formatCountdown(holdSecondsLeft)}</span>.
+              </div>
+            )}
 
-                return (
-                  <TierCard
-                    key={field.id}
-                    tier={tier}
-                    index={index}
-                    quantity={quantity}
-                    register={form.register}
-                    onDecrement={() =>
-                      form.setValue(`items.${index}.quantity`, Math.max(0, quantity - 1))
-                    }
-                    onIncrement={() =>
-                      form.setValue(
-                        `items.${index}.quantity`,
-                        Math.min(tier.remainingQuantity, quantity + 1)
-                      )
-                    }
-                  />
-                );
-              })}
+            {overallError && <p className="mt-3 text-sm text-rose-300">{overallError}</p>}
 
-              {overallError && <p className="text-sm text-rose-300">{overallError}</p>}
+            {!holdToken && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleHold}
+                  className="mt-4 w-full rounded-2xl bg-clay-500 px-6 py-3 text-base font-semibold text-ink-900 transition hover:bg-clay-400 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={!canHold || holdMutation.isPending}
+                  title={!canHold ? 'Select seats in the map to enable hold.' : undefined}
+                >
+                  {holdCtaLabel}
+                </button>
 
-              <button
-                type="submit"
-                className="w-full rounded-2xl bg-clay-500 px-6 py-3 text-base font-semibold text-ink-900 transition hover:bg-clay-400 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={!canSubmit || mutation.isPending || paymentState !== PaymentState.Idle}
-              >
-                {primaryCtaLabel}
-              </button>
-            </div>
+                {!canHold && (
+                  <p className="mt-2 text-xs text-slate-400">
+                    Select seats in the map above to enable the hold button.
+                  </p>
+                )}
+                {holdMutation.isPending && (
+                  <p className="mt-2 text-xs text-slate-400">Holding seats…</p>
+                )}
+              </>
+            )}
           </SectionCard>
 
           <SectionCard title="Order summary" description="Review your selection before confirming.">
@@ -285,25 +398,34 @@ const Booking = () => {
                 </button>
               </div>
             </div>
+
+            {holdToken && (
+              <div className="mt-5 border-t border-white/10 pt-5">
+                <button
+                  type="submit"
+                  className="w-full rounded-2xl border border-white/10 bg-white/5 px-6 py-3 text-sm font-semibold text-white transition hover:border-white/30 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={
+                    !canPay || bookingMutation.isPending || paymentState !== PaymentState.Idle
+                  }
+                  title={!canPay ? 'Enter name and email to enable payment.' : undefined}
+                >
+                  Proceed to payment
+                </button>
+                {!canPay && (
+                  <p className="mt-2 text-xs text-slate-400">
+                    Enter your name and email to enable payment.
+                  </p>
+                )}
+                {paymentState !== PaymentState.Idle && (
+                  <p className="mt-2 text-xs text-slate-400">Processing payment…</p>
+                )}
+              </div>
+            )}
           </SectionCard>
         </form>
       </div>
 
       {toast && <Toast type={toast.type} message={toast.message} />}
-
-      {activeTier && (
-        <TicketModal
-          tier={activeTier}
-          quantity={activeQuantity}
-          onClose={() => setActiveTierId(null)}
-          onQuantityChange={(value) => {
-            if (activeIndex < 0) return;
-            form.setValue(`items.${activeIndex}.quantity`, value);
-          }}
-          onConfirm={handleModalConfirm}
-          isSubmitting={mutation.isPending}
-        />
-      )}
     </div>
   );
 };
