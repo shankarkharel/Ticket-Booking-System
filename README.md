@@ -1,6 +1,6 @@
 # Single-Concert Ticket Booking System
 
-A production‑minded take‑home implementation for a single concert with three tiers (VIP, Front Row, GA). It emphasizes correctness under concurrency, idempotent booking, and clean UX.
+A production‑minded take‑home implementation for a single concert with three tiers (VIP, Front Row, GA). It emphasizes correctness under concurrency, **seat‑level holds**, idempotent booking, and a clean two‑page UX.
 
 ## Quick facts
 
@@ -8,34 +8,36 @@ A production‑minded take‑home implementation for a single concert with three
 - **Frontend**: React + TypeScript + Vite + Tailwind + React Hook Form + TanStack Query
 - **Backend**: Node.js + TypeScript + Fastify + Prisma
 - **Database**: Postgres
-  ![alt text](image-1.png)
-- **Concurrency**: Atomic conditional updates in a DB transaction
+- **Concurrency**: Atomic conditional updates in DB transactions
 - **Idempotency**: Required `Idempotency-Key` header
 - **Payment**: Mocked (PayPal/Card)
-- **Two pages**: Event info → Booking flow
+- **Flow**: Event info → Seat map → Hold (2 min) → Payment confirmation
 
 ![alt text](image.png)
 
 ## Why this architecture
 
 - Monolith + Postgres: reliable, easy to run, strong transaction semantics.
-- Inventory per tier: matches requirements without seat‑level complexity.
+- Seat‑level inventory: enables a realistic seat map UX and precise availability.
 - Shared contracts: API + UI use the same Zod schemas and types.
 - Idempotency + rate limiting: protects booking endpoint from retries and abuse.
 
 ## Concurrency strategy (no oversell)
 
-The booking transaction uses an atomic conditional update per tier:
+The system uses **seat‑level holds** with transactional updates:
 
-- Requests are sorted by `tierId` to reduce deadlocks.
-- `UPDATE ticket_tiers SET remaining_quantity = remaining_quantity - $qty WHERE remaining_quantity >= $qty RETURNING *`.
-- If any update fails, the transaction aborts and inventory remains consistent.
+1. **Hold seats**: `POST /holds` updates only `AVAILABLE` seats to `HELD`, attaches a `holdToken`, and sets `holdExpiresAt` (2 min).
+2. **Book**: `POST /bookings` assigns held seats to a booking only if the `holdToken` matches and hasn’t expired.
+3. **Confirm**: On payment success, seats move from `HELD` → `BOOKED`.
+4. **Expire holds**: Expired holds are released before listing tiers/seats and before any hold/booking mutation.
+
+This prevents double‑booking even under parallel requests.
 
 ## Trade‑offs
 
-- Tier inventory (not seat numbers) to keep scope aligned.
+- **Seat map added** (beyond tier‑only scope): improves UX and aligns with “no double‑booking” intent but adds schema/logic complexity.
+- **Hold‑then‑pay**: avoids long transactions during payment simulation but requires expiry handling.
 - Monolith over microservices for clarity and speed.
-- Payment simulation happens after inventory reservation to avoid long‑held locks.
 
 ## Scale & reliability (design intent)
 
@@ -43,9 +45,9 @@ Targets: **1M DAU**, **50k concurrent**, **p95 < 500ms**, **99.99% availability*
 
 - Stateless API replicas behind a load balancer.
 - Postgres primary + read replicas for scale.
-- Redis cache for tier catalog.
+- Redis cache for tiers/seats read paths.
+- Background workers for hold expiry + retries.
 - CDN for static assets.
-- Background workers for retries + reservation expiry.
 - Observability: logs, metrics, tracing.
 - Rate limiting + idempotency at the edge.
 
@@ -117,6 +119,28 @@ npx prisma studio --schema prisma/schema.prisma
 curl http://localhost:4000/tiers
 ```
 
+### Get seats
+
+```bash
+curl http://localhost:4000/seats
+```
+
+### Hold seats
+
+```bash
+curl -X POST http://localhost:4000/holds \
+  -H "Content-Type: application/json" \
+  -d '{"seatIds":[1,2,3]}'
+```
+
+### Release a hold
+
+```bash
+curl -X POST http://localhost:4000/holds/release \
+  -H "Content-Type: application/json" \
+  -d '{"holdToken":"<token>"}'
+```
+
 ### Create a booking
 
 ```bash
@@ -126,7 +150,8 @@ curl -X POST http://localhost:4000/bookings \
   -d '{
     "name": "Alex Johnson",
     "email": "alex@email.com",
-    "items": [{"tierId": 1, "quantity": 2}]
+    "holdToken": "<token>",
+    "seatIds": [1,2,3]
   }'
 ```
 
@@ -140,7 +165,8 @@ curl -X POST http://localhost:4000/bookings \
   -d '{
     "name": "Alex Johnson",
     "email": "alex@email.com",
-    "items": [{"tierId": 1, "quantity": 1}]
+    "holdToken": "<token>",
+    "seatIds": [1]
   }'
 ```
 
@@ -150,7 +176,7 @@ curl -X POST http://localhost:4000/bookings \
 docker compose exec api npm run test:concurrency
 ```
 
-Fires 100 parallel requests against GA and asserts no oversell.
+Fires 100 parallel requests against GA, verifies holds and bookings never exceed availability.
 
 ## Developer tooling
 
@@ -172,43 +198,16 @@ From repo root:
 
 ## Future improvements
 
-- Reservation expiry worker
+- Reservation expiry worker (currently handled on request paths)
 - Queue‑based payment processing
 - WebSocket live inventory updates
 - Audit logs
 - Feature flags
 
-Build & Run
+## Screens
 
-```bash
-docker compose down
-docker compose up --build
-```
-
-Open http://localhost:5173 and complete a booking.
-API sanity
-
-curl http://localhost:4000/health
-curl http://localhost:4000/tiers
-
-## Concurrency proof
-
-```bash
- npm run -w apps/api test:concurrency
-```
-
-`Confirm “confirmed tickets ≤ available”.`
-
-## Quality gates
-
-```bash
-npm run lint
-npm run typecheck
-```
-
-OUTPUT:
-Home Page
+Home Page  
 ![alt text](image-2.png)
 
-Booking Page
+Booking Page  
 ![alt text](image-4.png)
