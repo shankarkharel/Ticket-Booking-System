@@ -33,6 +33,8 @@ const main = async () => {
         'idempotency-key': randomUUID()
       },
       body: JSON.stringify({
+        name: 'Load Test',
+        email: 'loadtest@example.com',
         items: [{ tierId: tier.id, quantity: QUANTITY }]
       })
     })
