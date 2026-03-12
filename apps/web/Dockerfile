@@ -3,9 +3,19 @@ FROM node:20-bookworm-slim
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm install
+COPY apps/web/package.json apps/web/package-lock.json* ./apps/web/
+COPY apps/api/package.json apps/api/package-lock.json* ./apps/api/
+COPY packages/contracts/package.json ./packages/contracts/
 
-COPY . .
+RUN npm install --workspaces --include-workspace-root
+
+COPY packages/contracts ./packages/contracts
+COPY apps/web ./apps/web
+
+WORKDIR /app/packages/contracts
+RUN npm run build
+
+WORKDIR /app/apps/web
 
 ARG VITE_API_URL
 ENV VITE_API_URL=$VITE_API_URL

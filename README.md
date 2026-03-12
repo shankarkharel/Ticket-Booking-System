@@ -1,46 +1,62 @@
 # Single-Concert Ticket Booking System
 
-## 1. Project overview
-A focused booking system for a single concert with three tiers (VIP, Front Row, GA). Pricing is fixed at VIP $100, Front Row $50, GA $10. Inventory is tracked by tier, bookings are transaction-safe, and idempotency prevents double-submit issues.
+A production‑minded take‑home implementation for a single concert with three tiers (VIP, Front Row, GA). It emphasizes correctness under concurrency, idempotent booking, and clean UX.
 
-## 2. Why this architecture
-- Monolith + Postgres: simplest reliable path for a take-home that still shows production judgment.
-- Inventory per tier: the requirement is quantities, not seat numbers, so we avoid unnecessary complexity.
-- USD-only display supports a global user base without multi-currency complexity.
-- Fastify + Prisma: fast development, strong Postgres transaction support.
-- Idempotency keys: protects against retries and double-clicks.
+## Quick facts
 
-## 3. Concurrency strategy
-The booking endpoint uses an atomic, conditional update for each tier inside a transaction:
+- **Tiers & pricing**: VIP $100, Front Row $50, GA $10 (USD)
+- **Frontend**: React + TypeScript + Vite + Tailwind + React Hook Form + TanStack Query
+- **Backend**: Node.js + TypeScript + Fastify + Prisma
+- **Database**: Postgres
+- **Concurrency**: Atomic conditional updates in a DB transaction
+- **Idempotency**: Required `Idempotency-Key` header
+- **Payment**: Mocked (PayPal/Card)
+- **Two pages**: Event info → Booking flow
+
+![alt text](image.png)
+
+## Why this architecture
+
+- Monolith + Postgres: reliable, easy to run, strong transaction semantics.
+- Inventory per tier: matches requirements without seat‑level complexity.
+- Shared contracts: API + UI use the same Zod schemas and types.
+- Idempotency + rate limiting: protects booking endpoint from retries and abuse.
+
+## Concurrency strategy (no oversell)
+
+The booking transaction uses an atomic conditional update per tier:
+
 - Requests are sorted by `tierId` to reduce deadlocks.
-- `UPDATE ... SET remaining_quantity = remaining_quantity - $qty WHERE remaining_quantity >= $qty RETURNING *`.
-- If any tier fails the update, the transaction aborts and no inventory is changed.
+- `UPDATE ticket_tiers SET remaining_quantity = remaining_quantity - $qty WHERE remaining_quantity >= $qty RETURNING *`.
+- If any update fails, the transaction aborts and inventory remains consistent.
 
-This guarantees no oversell under concurrent load.
+## Trade‑offs
 
-## 4. Trade-offs
-- Inventory-per-tier instead of seat numbers keeps scope aligned with requirements.
-- Monolith over microservices for clarity and fast evaluation.
-- Payment simulation happens after the reservation to avoid long-held locks.
+- Tier inventory (not seat numbers) to keep scope aligned.
+- Monolith over microservices for clarity and speed.
+- Payment simulation happens after inventory reservation to avoid long‑held locks.
 
-## 5. Scale discussion
-To support 1,000,000 DAU, 50,000 concurrent users, p95 < 500ms, and 99.99% availability:
+## Scale & reliability (design intent)
+
+Targets: **1M DAU**, **50k concurrent**, **p95 < 500ms**, **99.99% availability**.
+
 - Stateless API replicas behind a load balancer.
-- Postgres primary + read replicas for read-heavy endpoints.
-- Redis cache for tier catalog reads.
-- CDN for static web assets.
-- Background workers for payment retries and reservation expiry.
-- Aggressive observability: logs, metrics, tracing.
-- Rate limiting + idempotency to protect the booking endpoint.
+- Postgres primary + read replicas for scale.
+- Redis cache for tier catalog.
+- CDN for static assets.
+- Background workers for retries + reservation expiry.
+- Observability: logs, metrics, tracing.
+- Rate limiting + idempotency at the edge.
 
-## 6. Reliability discussion
-- Idempotency protects against duplicate requests.
-- Inventory updates happen inside ACID transactions.
-- Booking status transitions are explicit (`PENDING`, `CONFIRMED`, `FAILED`).
-- Failed payments compensate inventory immediately.
-- Designed for easy extension to reservation expiry or queue-based payment processing.
+## Project layout
 
-## 7. Run instructions
+- `apps/web` – UI
+- `apps/api` – API
+- `packages/contracts` – shared Zod schemas + API types
+- `docker-compose.yml` – local orchestration
+
+## Run the project (Docker)
+
 Prereqs: Docker + Docker Compose.
 
 ```bash
@@ -48,54 +64,115 @@ docker compose up --build
 ```
 
 Services:
+
 - API: `http://localhost:4000`
 - Web: `http://localhost:5173`
 - Postgres (host): `localhost:55432`
 
 Seed data is inserted automatically on container start.
 
-### Useful API endpoints
-- `GET /tiers`
-- `POST /bookings`
-  - header: `Idempotency-Key: <uuid>`
-  - body: `{ "name": "Alex Johnson", "email": "alex@email.com", "items": [{ "tierId": 1, "quantity": 2 }] }`
+### Local install (without Docker)
 
-### Simulate payment failure
-Send `x-fail-payment: 1` to force a failure and see inventory rollback.
-
-### Concurrency proof
-Run the script below while the stack is up:
+From repo root (workspaces enabled):
 
 ```bash
-docker compose exec api npm run test:concurrency
+npm install
 ```
 
-It fires 100 parallel requests against the GA tier and asserts confirmed bookings never exceed inventory.
+Then from `apps/api`:
 
-### Prisma Studio (optional)
-From `apps/api`:
+```bash
+npx prisma generate
+npx prisma db push
+npm run dev
+```
+
+From `apps/web`:
+
+```bash
+npm run dev
+```
+
+## View the database (Prisma Studio)
+
+**Preferred (latest UI with Prisma 7):**
 
 ```bash
 npx prisma studio --url "postgresql://ticket_user:ticket_pass@localhost:55432/ticket_db?schema=public"
 ```
 
-## 8. Future improvements
-- Reservation expiry with a background release job.
-- Payment queue + retry policy.
-- WebSocket live inventory updates.
-- Audit logs for booking changes.
-- Feature flags for pricing experiments.
+If your CLI version doesn’t support `--url`, use:
 
-## Project layout
-- `apps/web`: React + Vite + Tailwind UI
-- `apps/api`: Fastify + Prisma API
-- `docker-compose.yml`: local orchestration
+```bash
+DATABASE_URL="postgresql://ticket_user:ticket_pass@localhost:55432/ticket_db?schema=public" \
+npx prisma studio --schema prisma/schema.prisma
+```
+
+## API testing
+
+### Get tiers
+
+```bash
+curl http://localhost:4000/tiers
+```
+
+### Create a booking
+
+```bash
+curl -X POST http://localhost:4000/bookings \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{
+    "name": "Alex Johnson",
+    "email": "alex@email.com",
+    "items": [{"tierId": 1, "quantity": 2}]
+  }'
+```
+
+### Simulate payment failure
+
+```bash
+curl -X POST http://localhost:4000/bookings \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "x-fail-payment: 1" \
+  -d '{
+    "name": "Alex Johnson",
+    "email": "alex@email.com",
+    "items": [{"tierId": 1, "quantity": 1}]
+  }'
+```
+
+## Concurrency proof
+
+```bash
+docker compose exec api npm run test:concurrency
+```
+
+Fires 100 parallel requests against GA and asserts no oversell.
+
+## Developer tooling
+
+From repo root:
+
+- `npm run lint`
+- `npm run format`
+- `npm run typecheck`
 
 ## Backend structure
-- `apps/api/src/app.ts`: app setup and route registration
-- `apps/api/src/routes/*`: HTTP route handlers
-- `apps/api/src/services/*`: booking and payment logic
-- `apps/api/src/schemas/*`: request validation
-- `apps/api/src/utils/*`: helpers
-- `apps/api/src/db.ts`: Prisma client
-- `apps/api/src/errors.ts`: domain errors
+
+- `apps/api/src/app.ts` – app setup + middleware
+- `apps/api/src/routes/*` – route handlers
+- `apps/api/src/services/*` – business logic
+- `apps/api/src/schemas/*` – request validation
+- `apps/api/src/http/error.ts` – API error envelope
+- `apps/api/src/utils/*` – helpers
+- `apps/api/src/db.ts` – Prisma client
+
+## Future improvements
+
+- Reservation expiry worker
+- Queue‑based payment processing
+- WebSocket live inventory updates
+- Audit logs
+- Feature flags

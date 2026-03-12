@@ -1,4 +1,4 @@
-import type { BookingResponse, Tier } from '../lib/types';
+import { BookingStatus, type BookingResponse, type Tier } from '../lib/types';
 import { formatCurrency } from '../lib/format';
 
 export type SelectedItem = {
@@ -15,7 +15,9 @@ type OrderSummaryProps = {
 const OrderSummary = ({ selectedItems, totalAmount, lastBooking }: OrderSummaryProps) => (
   <div className="flex flex-col gap-4">
     <div className="space-y-3">
-      {selectedItems.length === 0 && <p className="text-sm text-slate-300">No tickets selected yet.</p>}
+      {selectedItems.length === 0 && (
+        <p className="text-sm text-slate-300">No tickets selected yet.</p>
+      )}
       {selectedItems.map((item) => (
         <div key={item.tier.id} className="flex items-center justify-between text-sm">
           <span>{item.tier.name}</span>
@@ -42,7 +44,7 @@ const OrderSummary = ({ selectedItems, totalAmount, lastBooking }: OrderSummaryP
           <span className="text-slate-200">Status</span>
           <span
             className={`font-semibold ${
-              lastBooking.status === 'CONFIRMED' ? 'text-emerald-300' : 'text-rose-300'
+              lastBooking.status === BookingStatus.CONFIRMED ? 'text-emerald-300' : 'text-rose-300'
             }`}
           >
             {lastBooking.status}
@@ -50,14 +52,16 @@ const OrderSummary = ({ selectedItems, totalAmount, lastBooking }: OrderSummaryP
         </div>
         <div className="mt-2 flex items-center justify-between">
           <span className="text-slate-200">Total paid</span>
-          <span className="font-semibold text-white">{formatCurrency(lastBooking.totalAmount)}</span>
+          <span className="font-semibold text-white">
+            {formatCurrency(lastBooking.totalAmount)}
+          </span>
         </div>
       </div>
     )}
 
     <div className="rounded-2xl border border-white/10 bg-ink-700/40 p-4 text-xs text-slate-300">
-      Inventory is reserved inside a database transaction with conditional updates. If stock changes mid-request,
-      the booking is rejected and inventory stays consistent.
+      Inventory is reserved inside a database transaction with conditional updates. If stock changes
+      mid-request, the booking is rejected and inventory stays consistent.
     </div>
   </div>
 );

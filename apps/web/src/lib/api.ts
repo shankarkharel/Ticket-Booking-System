@@ -1,4 +1,4 @@
-import type { BookingResponse, Tier } from './types';
+import type { BookingResponse, Tier, ApiErrorResponse } from '@ticket/contracts';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
@@ -28,7 +28,9 @@ export const createBooking = async (payload: {
   const body = bodyText ? JSON.parse(bodyText) : null;
 
   if (!response.ok) {
-    const message = body?.error || 'Booking failed. Please try again.';
+    const errorPayload = body as ApiErrorResponse | null;
+    const message =
+      errorPayload?.error?.message || body?.error || 'Booking failed. Please try again.';
     throw new Error(message);
   }
 
