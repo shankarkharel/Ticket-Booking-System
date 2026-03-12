@@ -178,6 +178,34 @@ From repo root:
 - Audit logs
 - Feature flags
 
+Build & Run
+
+```bash
+docker compose down
+docker compose up --build
+```
+
+Open http://localhost:5173 and complete a booking.
+API sanity
+
+curl http://localhost:4000/health
+curl http://localhost:4000/tiers
+
+## Concurrency proof
+
+```bash
+ npm run -w apps/api test:concurrency
+```
+
+`Confirm “confirmed tickets ≤ available”.`
+
+## Quality gates
+
+```bash
+npm run lint
+npm run typecheck
+```
+
 OUTPUT:
 Home Page
 ![alt text](image-2.png)
