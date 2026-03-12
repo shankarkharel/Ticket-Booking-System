@@ -36,6 +36,7 @@ model Booking {
   customerName    String        @map("customer_name")
   customerEmail   String        @map("customer_email")
   status          BookingStatus
+  holdToken       String        @unique @map("hold_token")
   idempotencyKey  String        @unique @map("idempotency_key")
   createdAt       DateTime      @default(now()) @map("created_at")
   items           BookingItem[]

@@ -15,3 +15,15 @@ export class SeatUnavailableError extends Error {
     this.seatIds = seatIds;
   }
 }
+
+export class InvalidHoldTokenError extends Error {
+  constructor() {
+    super('INVALID_HOLD_TOKEN');
+  }
+}
+
+export class IdempotencyConflictError extends Error {
+  constructor() {
+    super('IDEMPOTENCY_KEY_REUSE');
+  }
+}

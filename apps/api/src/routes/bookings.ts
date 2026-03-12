@@ -3,7 +3,12 @@ import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import prisma from '../db';
 import { bookingRequestSchema, type BookingRequest } from '../schemas/booking';
-import { InsufficientInventoryError, SeatUnavailableError } from '../errors';
+import {
+  IdempotencyConflictError,
+  InsufficientInventoryError,
+  InvalidHoldTokenError,
+  SeatUnavailableError
+} from '../errors';
 import { simulatePayment } from '../services/paymentService';
 import {
   reserveBooking,
@@ -59,6 +64,24 @@ const bookingRoutes = async (app: FastifyInstance) => {
         );
       }
 
+      if (error instanceof InvalidHoldTokenError) {
+        return sendError(
+          reply,
+          409,
+          'INVALID_HOLD_TOKEN',
+          'The hold token is invalid or has expired. Please select seats again.'
+        );
+      }
+
+      if (error instanceof IdempotencyConflictError) {
+        return sendError(
+          reply,
+          409,
+          'IDEMPOTENCY_KEY_REUSE',
+          'This Idempotency-Key was already used with different booking data.'
+        );
+      }
+
       if (error instanceof InsufficientInventoryError) {
         return sendError(
           reply,
@@ -96,8 +119,35 @@ const bookingRoutes = async (app: FastifyInstance) => {
     const paymentResult = await simulatePayment(shouldFailPayment);
 
     if (paymentResult.success) {
-      const confirmed = await confirmBooking(prisma, booking.id);
-      return reply.send(toBookingResponse(confirmed, false));
+      try {
+        const confirmed = await confirmBooking(prisma, booking.id);
+        return reply.send(toBookingResponse(confirmed, false));
+      } catch (error) {
+        const failed = await failBooking(prisma, booking);
+        const responseBooking = failed ?? booking;
+
+        if (error instanceof SeatUnavailableError) {
+          return sendError(
+            reply,
+            409,
+            'SEAT_UNAVAILABLE',
+            'Hold expired before payment confirmation. Please select seats again.',
+            { seatIds: error.seatIds }
+          );
+        }
+
+        if (error instanceof InvalidHoldTokenError) {
+          return sendError(
+            reply,
+            409,
+            'INVALID_HOLD_TOKEN',
+            'Hold verification failed during payment confirmation.'
+          );
+        }
+
+        request.log.error(error, 'Payment confirmation failed');
+        return reply.code(402).send(toBookingResponse(responseBooking, false));
+      }
     }
 
     const failed = await failBooking(prisma, booking);

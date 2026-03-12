@@ -1,6 +1,6 @@
 import { BookingStatus, Prisma, PrismaClient, SeatStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
-import { SeatUnavailableError } from '../errors';
+import { IdempotencyConflictError, InvalidHoldTokenError, SeatUnavailableError } from '../errors';
 import computeTotal from '../utils/computeTotal';
 import { BookingStatus as ContractBookingStatus, type BookingResponse } from '@ticket/contracts';
 import { releaseExpiredHolds } from './seatService';
@@ -28,6 +28,15 @@ export const reserveBooking = async (
     });
 
     if (existing) {
+      const existingSeatIds = existing.seats.map((seat) => seat.id).sort((a, b) => a - b);
+      const sameSeats =
+        existingSeatIds.length === uniqueSeatIds.length &&
+        existingSeatIds.every((value, index) => value === uniqueSeatIds[index]);
+
+      if (existing.holdToken !== holdToken || !sameSeats) {
+        throw new IdempotencyConflictError();
+      }
+
       return { booking: existing, created: false };
     }
 
@@ -39,6 +48,7 @@ export const reserveBooking = async (
         customerName,
         customerEmail,
         status: BookingStatus.PENDING,
+        holdToken,
         idempotencyKey
       }
     });
@@ -101,10 +111,56 @@ export const reserveBooking = async (
 
 export const confirmBooking = async (prisma: PrismaClient, bookingId: number) => {
   return prisma.$transaction(async (tx) => {
-    await tx.ticketSeat.updateMany({
+    const booking = await tx.booking.findUnique({
+      where: { id: bookingId },
+      include: { items: true, seats: true }
+    });
+
+    if (!booking) {
+      throw new InvalidHoldTokenError();
+    }
+
+    if (booking.status !== BookingStatus.PENDING) {
+      return booking;
+    }
+
+    if (!booking.holdToken) {
+      throw new InvalidHoldTokenError();
+    }
+
+    const seats = await tx.ticketSeat.findMany({
       where: { bookingId, status: SeatStatus.HELD },
+      select: { id: true, holdExpiresAt: true, holdToken: true }
+    });
+
+    if (seats.length === 0) {
+      throw new SeatUnavailableError([]);
+    }
+
+    const invalidHold = seats.filter((seat) => seat.holdToken !== booking.holdToken);
+    if (invalidHold.length > 0) {
+      throw new InvalidHoldTokenError();
+    }
+
+    const now = new Date();
+    const expired = seats.filter((seat) => !seat.holdExpiresAt || seat.holdExpiresAt <= now);
+    if (expired.length > 0) {
+      throw new SeatUnavailableError(expired.map((seat) => seat.id));
+    }
+
+    const updated = await tx.ticketSeat.updateMany({
+      where: {
+        bookingId,
+        status: SeatStatus.HELD,
+        holdToken: booking.holdToken,
+        holdExpiresAt: { gt: now }
+      },
       data: { status: SeatStatus.BOOKED, holdToken: null, holdExpiresAt: null }
     });
+
+    if (updated.count !== seats.length) {
+      throw new SeatUnavailableError(seats.map((seat) => seat.id));
+    }
 
     return tx.booking.update({
       where: { id: bookingId },

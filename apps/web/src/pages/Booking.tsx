@@ -110,6 +110,27 @@ const Booking = () => {
     [selectedSeatIds, seatsById]
   );
 
+  const tierNameById = useMemo(() => {
+    const map = new Map<number, string>();
+    (tiers ?? []).forEach((tier) => map.set(tier.id, tier.name));
+    return map;
+  }, [tiers]);
+
+  const selectedSeatLines = useMemo(() => {
+    if (selectedSeatIds.length === 0) {
+      return [];
+    }
+
+    const grouped = selectedSeats.reduce<Record<string, string[]>>((acc, seat) => {
+      const tierName = tierNameById.get(seat.tierId) ?? `Tier ${seat.tierId}`;
+      if (!acc[tierName]) acc[tierName] = [];
+      acc[tierName].push(seat.label);
+      return acc;
+    }, {});
+
+    return Object.entries(grouped).map(([tierName, labels]) => `${tierName}: ${labels.join(', ')}`);
+  }, [selectedSeatIds.length, selectedSeats, tierNameById]);
+
   useEffect(() => {
     if (!seats) return;
     const availableIds = new Set(
@@ -333,6 +354,21 @@ const Booking = () => {
             )}
 
             {overallError && <p className="mt-3 text-sm text-rose-300">{overallError}</p>}
+
+            <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-200">
+              <div className="text-[0.65rem] uppercase tracking-[0.3em] text-slate-400">
+                Selected seats
+              </div>
+              {selectedSeatIds.length === 0 ? (
+                <div className="mt-1 text-sm text-white">No seats selected yet.</div>
+              ) : (
+                <div className="mt-2 flex flex-col gap-1 text-sm text-white">
+                  {selectedSeatLines.map((line) => (
+                    <div key={line}>{line}</div>
+                  ))}
+                </div>
+              )}
+            </div>
 
             {!holdToken && (
               <>
