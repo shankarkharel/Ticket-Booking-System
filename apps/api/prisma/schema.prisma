@@ -27,6 +27,8 @@ model TicketTier {
 model Booking {
   id              Int           @id @default(autoincrement())
   bookingReference String       @unique @map("booking_reference")
+  customerName    String        @map("customer_name")
+  customerEmail   String        @map("customer_email")
   status          BookingStatus
   idempotencyKey  String        @unique @map("idempotency_key")
   createdAt       DateTime      @default(now()) @map("created_at")
