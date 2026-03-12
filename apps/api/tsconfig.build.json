@@ -2,7 +2,10 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "rootDir": "src",
-    "outDir": "dist"
+    "outDir": "dist",
+    "paths": {
+      "@ticket/contracts": ["../../packages/contracts/dist/index.d.ts"]
+    }
   },
   "include": ["src"]
 }

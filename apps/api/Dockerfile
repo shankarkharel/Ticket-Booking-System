@@ -5,11 +5,12 @@ WORKDIR /app
 RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json* ./
+COPY tsconfig.base.json ./
 COPY apps/api/package.json apps/api/package-lock.json* ./apps/api/
 COPY apps/web/package.json apps/web/package-lock.json* ./apps/web/
 COPY packages/contracts/package.json ./packages/contracts/
 
-RUN npm install --workspaces --include-workspace-root
+RUN npm install --workspaces --include-workspace-root --include=optional
 
 COPY packages/contracts ./packages/contracts
 COPY apps/api ./apps/api

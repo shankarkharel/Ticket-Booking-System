@@ -8,6 +8,7 @@ A production‑minded take‑home implementation for a single concert with three
 - **Frontend**: React + TypeScript + Vite + Tailwind + React Hook Form + TanStack Query
 - **Backend**: Node.js + TypeScript + Fastify + Prisma
 - **Database**: Postgres
+  ![alt text](image-1.png)
 - **Concurrency**: Atomic conditional updates in a DB transaction
 - **Idempotency**: Required `Idempotency-Key` header
 - **Payment**: Mocked (PayPal/Card)
@@ -176,3 +177,10 @@ From repo root:
 - WebSocket live inventory updates
 - Audit logs
 - Feature flags
+
+OUTPUT:
+Home Page
+![alt text](image-2.png)
+
+Booking Page
+![alt text](image-3.png)

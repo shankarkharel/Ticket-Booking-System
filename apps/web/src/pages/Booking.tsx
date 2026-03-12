@@ -7,7 +7,6 @@ import { bookingSchema, type BookingForm } from '../lib/schemas';
 import { createBooking, fetchTiers } from '../lib/api';
 import type { BookingResponse, Tier } from '../lib/types';
 import SectionCard from '../components/SectionCard';
-import Hero from '../components/Hero';
 import TierCard from '../components/TierCard';
 import OrderSummary, { type SelectedItem } from '../components/OrderSummary';
 import Toast from '../components/Toast';
@@ -173,7 +172,12 @@ const Booking = () => {
           </span>
         </div>
 
-        <Hero />
+        <div className="rounded-[28px] border border-white/10 bg-ink-900/60 p-6">
+          <h1 className="text-3xl font-semibold text-white">Book tickets</h1>
+          <p className="mt-2 text-sm text-slate-300">
+            Choose your tiers, confirm payment, and receive your booking reference instantly.
+          </p>
+        </div>
 
         <TicketFinder
           tiers={tiers}

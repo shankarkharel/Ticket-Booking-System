@@ -1,6 +1,16 @@
+import 'dotenv/config';
+import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
+import { Pool } from 'pg';
+import { config } from '../src/config';
 
-const prisma = new PrismaClient();
+const pool = new Pool({
+  connectionString: config.DATABASE_URL
+});
+
+const prisma = new PrismaClient({
+  adapter: new PrismaPg(pool)
+});
 
 async function main() {
   const tiers = [
@@ -34,4 +44,5 @@ main()
   })
   .finally(async () => {
     await prisma.$disconnect();
+    await pool.end();
   });
