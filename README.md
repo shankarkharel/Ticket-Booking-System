@@ -50,6 +50,7 @@ docker compose up --build
 Services:
 - API: `http://localhost:4000`
 - Web: `http://localhost:5173`
+- Postgres (host): `localhost:55432`
 
 Seed data is inserted automatically on container start.
 
@@ -57,7 +58,7 @@ Seed data is inserted automatically on container start.
 - `GET /tiers`
 - `POST /bookings`
   - header: `Idempotency-Key: <uuid>`
-  - body: `{ "items": [{ "tierId": 1, "quantity": 2 }] }`
+  - body: `{ "name": "Alex Johnson", "email": "alex@email.com", "items": [{ "tierId": 1, "quantity": 2 }] }`
 
 ### Simulate payment failure
 Send `x-fail-payment: 1` to force a failure and see inventory rollback.
@@ -71,6 +72,13 @@ docker compose exec api npm run test:concurrency
 
 It fires 100 parallel requests against the GA tier and asserts confirmed bookings never exceed inventory.
 
+### Prisma Studio (optional)
+From `apps/api`:
+
+```bash
+npx prisma studio --url "postgresql://ticket_user:ticket_pass@localhost:55432/ticket_db?schema=public"
+```
+
 ## 8. Future improvements
 - Reservation expiry with a background release job.
 - Payment queue + retry policy.
@@ -82,3 +90,12 @@ It fires 100 parallel requests against the GA tier and asserts confirmed booking
 - `apps/web`: React + Vite + Tailwind UI
 - `apps/api`: Fastify + Prisma API
 - `docker-compose.yml`: local orchestration
+
+## Backend structure
+- `apps/api/src/app.ts`: app setup and route registration
+- `apps/api/src/routes/*`: HTTP route handlers
+- `apps/api/src/services/*`: booking and payment logic
+- `apps/api/src/schemas/*`: request validation
+- `apps/api/src/utils/*`: helpers
+- `apps/api/src/db.ts`: Prisma client
+- `apps/api/src/errors.ts`: domain errors
